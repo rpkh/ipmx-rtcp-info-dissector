@@ -1,6 +1,6 @@
 -------------------------------------------------------------------------------
 -- Lua Wireshark post-dissector for extracting IPMX info blocks from RTCP sender reports
--- Copyright (C) 2023  Raymond Hermans (raymond.hermans@gmail.com)
+-- Copyright (C) 2023 - 2024  Raymond Hermans (raymond.hermans@gmail.com)
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
@@ -14,7 +14,7 @@
 --
 -------------------------------------------------------------------------------
 local plugin_info = {
-  version = "1.0.0",
+  version = "1.1.0",
   author = "Raymond Hermans",
   description = "Post-dissector for extracting IPMX info blocks from RTCP sender reports",
   repository = "https://github.com/rpkh/ipmx-rtcp-info-dissector",
@@ -90,8 +90,6 @@ local rtcp_sr_timestamp_ntp_lsw = Field.new("rtcp.timestamp.ntp.lsw")
 local rtcp_sr_timestamp_rtp = Field.new("rtcp.timestamp.rtp")
 
 local rtcp_profile_extension = Field.new("rtcp.profile-specific-extension")
-local rtcp_profile_extension_type = Field.new("rtcp.profile-specific-extension.type")
-local rtcp_profile_extension_length = Field.new("rtcp.profile-specific-extension.length")
 
 -------------------------------------------------------------------------------
 -- Wireshark specifics for registering the dissector
@@ -217,18 +215,32 @@ function ipmx_info.dissector(buffer, pinfo, tree)
   if length == 0 then return end
 
   -- Check if an RTCP profile extension has been detected
-  ext_type = rtcp_profile_extension_type()
-  if not ext_type then return end
-
-  -- Check if it has the IPMX tag
-  if ext_type.value ~= ipmx_profile_extension then return end
-
-  -- Easy way to extract the starting offset of the IPMX info block
   profile_extension = rtcp_profile_extension()
-  Offset = profile_extension.offset
-  -- Easy way to extract the IPMX info block length
-  ext_len = rtcp_profile_extension_length()
+  if not profile_extension then return end
 
+  -- Based on the Wireshark version there's a difference with the returned offset.
+  -- Older versions return an additional +4 offset.
+  Offset = profile_extension.offset
+
+  -- Extract the extension type from the current offset.
+  ext_type = buffer:range(Offset,2):uint()
+  -- Check if the extension type has the IPMX tag.
+  -- If not, assume it's an older Wireshark version.
+  if ext_type ~= ipmx_profile_extension then
+    -- Adjust the offset in case an older version of Wireshark is used.
+    Offset = Offset - 4
+    -- Extract the extension type from the adjusted offset.
+    ext_type = buffer:range(Offset,2):uint()
+    -- Check if the extension type has the IPMX tag.
+    -- If not, assume the packet does not contain IPMX info.
+    if ext_type ~= ipmx_profile_extension then return end
+  end
+
+  Offset = Offset + 2
+  -- Extract the extension length
+  ext_len = buffer:range(Offset,2):uint()
+
+  Offset = Offset + 2
   -- Create root tree
   ipmx_rtcp_tree = tree:add(ipmx_info, "IPMX RTCP Sender Report")
   -- Extract RTCP sender report NTP field and add to tree
@@ -239,7 +251,7 @@ function ipmx_info.dissector(buffer, pinfo, tree)
   ipmx_rtcp_tree:add(ipmx_rtcp_sr_rtp_timestamp, buffer(rtcp_sr_ptp_time.offset+8,4))
 
   -- Create IPMX info block tree and add to root
-  ipmx_info_tree = ipmx_rtcp_tree:add(ipmx_info, buffer(Offset,(ext_len.value)*4), "IPMX Info Block")
+  ipmx_info_tree = ipmx_rtcp_tree:add(ipmx_info, buffer(Offset,(ext_len)*4), "IPMX Info Block")
   ipmx_info_tree:add(ipmx_info_block_version, buffer(Offset,1))
   Offset = Offset + 4
   ipmx_info_tree:add(ipmx_info_ts_refclk, buffer(Offset,64))
@@ -248,7 +260,7 @@ function ipmx_info.dissector(buffer, pinfo, tree)
   Offset = Offset + 12
 
   -- Check if a media info block is expected
-  if ext_len.value <= 20 then return end
+  if ext_len <= 20 then return end
 
   -- Extract media info block and add to IPMX info block tree
   media_block_type = buffer:range(Offset,2):uint()
@@ -264,7 +276,7 @@ function ipmx_info.dissector(buffer, pinfo, tree)
   if parse_func then
     parse_func(buffer, Offset, media_block_tree, media_block_len)
   else
-    print("Unsupported media type")
+    print("IPMX info:Unsupported media type")
   end
 
 end
