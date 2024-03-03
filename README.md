@@ -11,5 +11,6 @@ Lua Wireshark post-dissector for extracting IPMX info blocks from RTCP sender re
 
 ## Known issues
 - Wireshark's built-in RTCP dissector falsely reports RTCP packets containing IPMX info blocks as malformed.  
-When RTCP profile specific extension support was added in the dissector, it was made specifically to support the definition used in [MS-RTP](https://learn.microsoft.com/en-us/openspecs/office_protocols/ms-rtp/26056cc7-e6a4-4699-b2a1-67f59d89631a)
+When RTCP profile specific extension support was added in the dissector, it was made specifically to support the definition used in [MS-RTP](https://learn.microsoft.com/en-us/openspecs/office_protocols/ms-rtp/26056cc7-e6a4-4699-b2a1-67f59d89631a).  
+For more info see [Wireshark issue](https://gitlab.com/wireshark/wireshark/-/issues/19393).
 
