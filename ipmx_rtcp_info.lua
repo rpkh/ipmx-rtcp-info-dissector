@@ -61,6 +61,7 @@ local media_type_tbl = {
 
 local media_info_type = ProtoField.uint16("ipmx_rtcp_info.media_info_type", "media info type", base.DEC, media_type_tbl)
 local media_info_length = ProtoField.uint16("ipmx_rtcp_info.media_info_length", "media info length", base.DEC)
+local media_info_data = ProtoField.bytes("ipmx_rtcp_info.media_info_data", "media info data")
 
 -------------------------------------------------------------------------------
 -- IPMX Media Info: Uncompressed Active Video
@@ -118,6 +119,7 @@ ipmx_info.fields = {
   -- IPMX Media Info Common
   media_info_type,
   media_info_length,
+  media_info_data,
   -- IPMX Media Info: Uncompressed Active Video
   video_info_sampling,
   video_info_float,
@@ -369,6 +371,7 @@ function ipmx_info.dissector(buffer, pinfo, tree)
       parse_func(buffer, offset, media_block_tree, media_block_len, bytes_remaining)
     else
       dbg_print("IPMX info:Unsupported media type")
+      media_block_tree:add(media_info_data, buffer(offset,media_block_len))
     end
     -- update offset and bytes remaining with the media info block length
     offset = offset + media_block_len
