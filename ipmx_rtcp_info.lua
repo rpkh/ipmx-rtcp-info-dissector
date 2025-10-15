@@ -1,6 +1,6 @@
 -------------------------------------------------------------------------------
 -- Lua Wireshark post-dissector for extracting IPMX info blocks from RTCP sender reports
--- Copyright (C) 2023 - 2024  Raymond Hermans (raymond.hermans@gmail.com)
+-- Copyright (C) 2023 - 2025  Raymond Hermans (raymond.hermans@gmail.com)
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
@@ -47,6 +47,7 @@ local media_type_tbl = {
   [2] = "PCM Digital Audio",
   [3] = "Constant Bit-rate Compressed Video",
   [4] = "AES3 Transparent Transport",
+  [5] = "(VBR) Compressed Video",
 }
 
 local media_info_type = ProtoField.uint16("ipmx_rtcp_info.media_info_type", "media info type", base.DEC, media_type_tbl)
@@ -206,6 +207,7 @@ local media_info_parse_tbl =
   [2] = audio_info_parse,
   [3] = video_info_parse,
   [4] = audio_info_parse,
+  [5] = video_info_parse,
 }
 
 -------------------------------------------------------------------------------
