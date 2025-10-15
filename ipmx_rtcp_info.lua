@@ -22,6 +22,15 @@ local plugin_info = {
 set_plugin_info(plugin_info)
 
 -------------------------------------------------------------------------------
+-- For debugging. Set 'DEBUG = true' to enable debug prints
+local DEBUG = false
+function dbg_print(...)
+  if DEBUG then
+    print(...)
+  end
+end
+
+-------------------------------------------------------------------------------
 -- RTCP SR fields interpreted for IPMX
 local ipmx_rtcp_sr_ptp_time_msw = ProtoField.uint32("ipmx_rtcp_info.ptp_time_msw", "PTP time MSW", base.DEC_HEX)
 local ipmx_rtcp_sr_ptp_time_lsw = ProtoField.uint32("ipmx_rtcp_info.ptp_time_lsw", "PTP time LSW", base.DEC_HEX)
@@ -143,6 +152,7 @@ register_postdissector(ipmx_info)
 -------------------------------------------------------------------------------
 -- Function for parsing and displaying the Uncompressed Active Video Info Block
 function video_info_parse(buffer, offset, tree, block_len)
+  dbg_print("> video_info_parse")
   video_tree = tree:add(ipmx_info, buffer(offset,(block_len*4)), "Data: Uncompressed Active Video")
   video_tree:add(video_info_sampling, buffer(offset,16))
   offset = offset + 16
@@ -181,6 +191,7 @@ end
 
 -- Function for parsing and displaying the PCM Digital Audio Info Block
 function audio_info_parse(buffer, offset, tree, block_len)
+  dbg_print("> audio_info_parse")
   audio_tree = tree:add(ipmx_info, buffer(offset,(block_len*4)), "Data: PCM Digital Audio")
   audio_tree:add(audio_info_samp_rate, buffer(offset,4))
   offset = offset + 4
@@ -264,6 +275,7 @@ function ipmx_info.dissector(buffer, pinfo, tree)
   -- Check if a media info block is expected
   if ext_len <= 20 then return end
 
+  dbg_print("> Parse Media Info Blocks")
   -- Extract media info block and add to IPMX info block tree
   media_block_type = buffer:range(Offset,2):uint()
   media_block_len = buffer:range(Offset+2,2):uint()
