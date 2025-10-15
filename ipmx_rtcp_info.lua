@@ -333,31 +333,47 @@ function ipmx_info.dissector(buffer, pinfo, tree)
   bytes_remaining = ipmx_ext_len - 80
 
   dbg_print("> Parse Media Info Blocks")
-  -- Extract media info block and add to IPMX info block tree
-  local media_block_type = buffer:range(offset,2):uint()
-  -- Media info block length field contains the length of the media info block,
-  -- including the header, the media info block content and any padding.
-  -- The value is in 32-bit words minus one.
-  local media_block_len = buffer:range(offset+2,2):uint()*4
-  if bytes_remaining < (media_block_len+4) then
-    ipmx_info_tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
-    return
+  dbg_print("bytes_remaining: " ..bytes_remaining)
+  -- Loop over the remaining bytes to extract all Media Info Blocks
+  while bytes_remaining > 0 do
+    if bytes_remaining < 4 then
+      ipmx_info_tree:add_proto_expert_info(E.block_length_error, "Unable to parse Media Info Block header")
+      return
+    end
+
+    -- Extract media info block and add to IPMX info block tree
+    local media_block_type = buffer:range(offset,2):uint()
+    -- Media info block length field contains the length of the media info block,
+    -- including the header, the media info block content and any padding.
+    -- The value is in 32-bit words minus one.
+    local media_block_len = buffer:range(offset+2,2):uint()*4
+    if bytes_remaining < (media_block_len+4) then
+      ipmx_info_tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+      return
+    end
+    local media_block_tree = ipmx_info_tree:add(ipmx_info, buffer(offset,media_block_len+4), "Media Info Block")
+    media_block_tree:add(media_info_type, buffer(offset,2))
+    offset = offset + 2
+    local media_len_tree = media_block_tree:add(media_info_length, buffer(offset,2))
+    media_len_tree:append_text(" (" ..(media_block_len+4).. " bytes)")
+    offset = offset + 2
+
+    bytes_remaining = bytes_remaining - 4
+
+    dbg_print("offset: " ..offset)
+    dbg_print("bytes_remaining: " ..bytes_remaining)
+    dbg_print("media_block_len: " ..media_block_len)
+    -- Use the media info block type for selecting the parse function
+    local parse_func = media_info_parse_tbl[media_block_type]
+    if parse_func then
+      parse_func(buffer, offset, media_block_tree, media_block_len, bytes_remaining)
+    else
+      dbg_print("IPMX info:Unsupported media type")
+    end
+    -- update offset and bytes remaining with the media info block length
+    offset = offset + media_block_len
+    bytes_remaining = bytes_remaining - media_block_len
+
+    dbg_print("bytes_remaining: " ..bytes_remaining)
   end
-  local media_block_tree = ipmx_info_tree:add(ipmx_info, buffer(offset,media_block_len+4), "Media Info Block")
-  media_block_tree:add(media_info_type, buffer(offset,2))
-  offset = offset + 2
-  local media_len_tree = media_block_tree:add(media_info_length, buffer(offset,2))
-  media_len_tree:append_text(" (" ..(media_block_len+4).. " bytes)")
-  offset = offset + 2
-
-  bytes_remaining = bytes_remaining - 4
-
-  -- Use the media info block type for selecting the parse function
-  local parse_func = media_info_parse_tbl[media_block_type]
-  if parse_func then
-    parse_func(buffer, offset, media_block_tree, media_block_len, bytes_remaining)
-  else
-    print("IPMX info:Unsupported media type")
-  end
-
 end
