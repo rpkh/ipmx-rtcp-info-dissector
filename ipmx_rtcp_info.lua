@@ -14,7 +14,7 @@
 --
 -------------------------------------------------------------------------------
 local plugin_info = {
-  version = "1.1.0",
+  version = "1.2.0",
   author = "Raymond Hermans",
   description = "Post-dissector for extracting IPMX info blocks from RTCP sender reports",
   repository = "https://github.com/rpkh/ipmx-rtcp-info-dissector",
