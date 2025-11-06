@@ -1,6 +1,6 @@
 -------------------------------------------------------------------------------
 -- Lua Wireshark post-dissector for extracting IPMX info blocks from RTCP sender reports
--- Copyright (C) 2023 - 2024  Raymond Hermans (raymond.hermans@gmail.com)
+-- Copyright (C) 2023 - 2025  Raymond Hermans (raymond.hermans@gmail.com)
 --
 -- This program is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU General Public License as published by
@@ -14,12 +14,21 @@
 --
 -------------------------------------------------------------------------------
 local plugin_info = {
-  version = "1.1.0",
+  version = "1.2.0",
   author = "Raymond Hermans",
   description = "Post-dissector for extracting IPMX info blocks from RTCP sender reports",
   repository = "https://github.com/rpkh/ipmx-rtcp-info-dissector",
 }
 set_plugin_info(plugin_info)
+
+-------------------------------------------------------------------------------
+-- For debugging. Set 'DEBUG = true' to enable debug prints
+local DEBUG = false
+function dbg_print(...)
+  if DEBUG then
+    print(...)
+  end
+end
 
 -------------------------------------------------------------------------------
 -- RTCP SR fields interpreted for IPMX
@@ -47,10 +56,12 @@ local media_type_tbl = {
   [2] = "PCM Digital Audio",
   [3] = "Constant Bit-rate Compressed Video",
   [4] = "AES3 Transparent Transport",
+  [5] = "(VBR) Compressed Video",
 }
 
 local media_info_type = ProtoField.uint16("ipmx_rtcp_info.media_info_type", "media info type", base.DEC, media_type_tbl)
 local media_info_length = ProtoField.uint16("ipmx_rtcp_info.media_info_length", "media info length", base.DEC)
+local media_info_data = ProtoField.bytes("ipmx_rtcp_info.media_info_data", "media info data")
 
 -------------------------------------------------------------------------------
 -- IPMX Media Info: Uncompressed Active Video
@@ -108,6 +119,7 @@ ipmx_info.fields = {
   -- IPMX Media Info Common
   media_info_type,
   media_info_length,
+  media_info_data,
   -- IPMX Media Info: Uncompressed Active Video
   video_info_sampling,
   video_info_float,
@@ -137,12 +149,28 @@ ipmx_info.fields = {
   audio_info_chan_order,
 }
 
+-- Expert info definitions (mostly used for notifying errors)
+local E = ipmx_info.experts
+E.block_length_error = ProtoExpert.new(
+  "ipmx_rtcp_info.block_length.error",
+  "Invalid Info Block Length",
+  expert.group.MALFORMED,
+  expert.severity.ERROR)
+
+-- Register the dissector
 register_postdissector(ipmx_info)
 
 -------------------------------------------------------------------------------
 -- Function for parsing and displaying the Uncompressed Active Video Info Block
-function video_info_parse(buffer, offset, tree, block_len)
-  video_tree = tree:add(ipmx_info, buffer(offset,(block_len*4)), "Data: Uncompressed Active Video")
+-- The Info Block has a fixed length of 88 bytes.
+function video_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> video_info_parse")
+  if (bytes_remaining < block_len) or (block_len ~= 88) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local video_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: Uncompressed Active Video")
   video_tree:add(video_info_sampling, buffer(offset,16))
   offset = offset + 16
   video_tree:add(video_info_float, buffer(offset,1))
@@ -179,8 +207,16 @@ function video_info_parse(buffer, offset, tree, block_len)
 end
 
 -- Function for parsing and displaying the PCM Digital Audio Info Block
-function audio_info_parse(buffer, offset, tree, block_len)
-  audio_tree = tree:add(ipmx_info, buffer(offset,(block_len*4)), "Data: PCM Digital Audio")
+-- The Info Block has a variable length, depending on the channel order string length.
+-- The minimum length is 16 bytes.
+function audio_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> audio_info_parse")
+  if (bytes_remaining < block_len) or (block_len < 16) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local audio_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: PCM Digital Audio")
   audio_tree:add(audio_info_samp_rate, buffer(offset,4))
   offset = offset + 4
   audio_tree:add(audio_info_samp_size, buffer(offset,1))
@@ -191,11 +227,33 @@ function audio_info_parse(buffer, offset, tree, block_len)
   offset = offset + 2
   audio_tree:add(audio_info_meas_samp_rate, buffer(offset,4))
   offset = offset + 4
-  audio_tree:add(audio_info_chan_order_len, buffer(offset,4))
-  ch_order_len = buffer:range(offset,4):uint()
+  -- Channel order length field contains the length of the
+  -- Channel order string in 32-bit words
+  local ch_order_len = buffer:range(offset,4):uint()*4
+  local chan_order_len_tree = audio_tree:add(audio_info_chan_order_len, buffer(offset,4))
+  chan_order_len_tree:append_text(" (" ..ch_order_len.. " bytes)")
   offset = offset + 4
-  if ch_order_len == 0 then return end
-  audio_tree:add(audio_info_chan_order, buffer(offset,(ch_order_len*4)))
+
+  if ch_order_len == 0 then
+    if block_len ~= 16 then
+      audio_tree:add_proto_expert_info(E.block_length_error,
+        "Invalid Channel Order String Length and Media Info Block Length combination")
+    end
+    return
+  else
+    if block_len ~= (16 + ch_order_len) then
+      audio_tree:add_proto_expert_info(E.block_length_error,
+        "Invalid Channel Order String Length and Media Info Block Length combination")
+    end
+  end
+
+  bytes_remaining = bytes_remaining - 16
+
+  if (bytes_remaining < ch_order_len) then
+    audio_tree:add_proto_expert_info(E.block_length_error, "Invalid Channel Order String Length")
+    return
+  end
+  audio_tree:add(audio_info_chan_order, buffer(offset,ch_order_len))
 end
 
 -- Media Info parse function table.
@@ -206,77 +264,119 @@ local media_info_parse_tbl =
   [2] = audio_info_parse,
   [3] = video_info_parse,
   [4] = audio_info_parse,
+  [5] = video_info_parse,
 }
 
 -------------------------------------------------------------------------------
 -- Main entry point
 function ipmx_info.dissector(buffer, pinfo, tree)
-  length = buffer:len()
+  local length = buffer:len()
   if length == 0 then return end
 
   -- Check if an RTCP profile extension has been detected
-  profile_extension = rtcp_profile_extension()
+  local profile_extension = rtcp_profile_extension()
   if not profile_extension then return end
 
   -- Based on the Wireshark version there's a difference with the returned offset.
   -- Older versions return an additional +4 offset.
-  Offset = profile_extension.offset
+  local offset = profile_extension.offset
 
   -- Extract the extension type from the current offset.
-  ext_type = buffer:range(Offset,2):uint()
+  local ext_type = buffer:range(offset,2):uint()
   -- Check if the extension type has the IPMX tag.
   -- If not, assume it's an older Wireshark version.
   if ext_type ~= ipmx_profile_extension then
     -- Adjust the offset in case an older version of Wireshark is used.
-    Offset = Offset - 4
+    offset = offset - 4
     -- Extract the extension type from the adjusted offset.
-    ext_type = buffer:range(Offset,2):uint()
+    ext_type = buffer:range(offset,2):uint()
     -- Check if the extension type has the IPMX tag.
     -- If not, assume the packet does not contain IPMX info.
     if ext_type ~= ipmx_profile_extension then return end
   end
 
-  Offset = Offset + 2
-  -- Extract the extension length
-  ext_len = buffer:range(Offset,2):uint()
+  offset = offset + 2
+  -- IPMX extension length field contains the length of the IPMX info block, including the header,
+  -- the IMPX info block content, all media info blocks contained in the IPMX info block, and any padding.
+  -- The value is in 32-bit words minus one.
+  local ipmx_ext_len = buffer:range(offset,2):uint()*4
 
-  Offset = Offset + 2
+  offset = offset + 2
+
   -- Create root tree
-  ipmx_rtcp_tree = tree:add(ipmx_info, "IPMX RTCP Sender Report")
+  local ipmx_rtcp_tree = tree:add(ipmx_info, "IPMX RTCP Sender Report")
   -- Extract RTCP sender report NTP field and add to tree
-  rtcp_sr_ptp_time = rtcp_sr_timestamp_ntp_msw()
+  local rtcp_sr_ptp_time = rtcp_sr_timestamp_ntp_msw()
   ipmx_rtcp_tree:add(ipmx_rtcp_sr_ptp_time_msw, buffer(rtcp_sr_ptp_time.offset,4))
   ipmx_rtcp_tree:add(ipmx_rtcp_sr_ptp_time_lsw, buffer(rtcp_sr_ptp_time.offset+4,4))
   ipmx_rtcp_tree:add(ipmx_rtcp_sr_ptp_time, buffer(rtcp_sr_ptp_time.offset,8)):set_generated()
   ipmx_rtcp_tree:add(ipmx_rtcp_sr_rtp_timestamp, buffer(rtcp_sr_ptp_time.offset+8,4))
 
-  -- Create IPMX info block tree and add to root
-  ipmx_info_tree = ipmx_rtcp_tree:add(ipmx_info, buffer(Offset,(ext_len)*4), "IPMX Info Block")
-  ipmx_info_tree:add(ipmx_info_block_version, buffer(Offset,1))
-  Offset = Offset + 4
-  ipmx_info_tree:add(ipmx_info_ts_refclk, buffer(Offset,64))
-  Offset = Offset + 64
-  ipmx_info_tree:add(ipmx_info_mediaclk, buffer(Offset,12))
-  Offset = Offset + 12
-
-  -- Check if a media info block is expected
-  if ext_len <= 20 then return end
-
-  -- Extract media info block and add to IPMX info block tree
-  media_block_type = buffer:range(Offset,2):uint()
-  media_block_len = buffer:range(Offset+2,2):uint()
-  media_block_tree = ipmx_info_tree:add(ipmx_info, buffer(Offset,(media_block_len+1)*4), "Media Info Block")
-  media_block_tree:add(media_info_type, buffer(Offset,2))
-  Offset = Offset + 2
-  media_block_tree:add(media_info_length, buffer(Offset,2))
-  Offset = Offset + 2
-
-  -- Use the media info block type for selecting the parse function
-  parse_func = media_info_parse_tbl[media_block_type]
-  if parse_func then
-    parse_func(buffer, Offset, media_block_tree, media_block_len)
-  else
-    print("IPMX info:Unsupported media type")
+  local bytes_remaining = buffer:reported_length_remaining(offset)
+  -- The IPMX info block has a variable length, depending on the type and number of media info blocks.
+  -- The minimum length is 80 bytes.
+  if (bytes_remaining < ipmx_ext_len) or (ipmx_ext_len < 80) then
+    ipmx_rtcp_tree:add_proto_expert_info(E.block_length_error, "Invalid IPMX Info Block Length")
+    return
   end
 
+  -- Create IPMX info block tree and add to root
+  local ipmx_info_tree = ipmx_rtcp_tree:add(ipmx_info, buffer(offset,ipmx_ext_len), "IPMX Info Block")
+  ipmx_info_tree:add(ipmx_info_block_version, buffer(offset,1))
+  offset = offset + 4
+  ipmx_info_tree:add(ipmx_info_ts_refclk, buffer(offset,64))
+  offset = offset + 64
+  ipmx_info_tree:add(ipmx_info_mediaclk, buffer(offset,12))
+  offset = offset + 12
+
+  -- Check if a media info block is expected
+  if ipmx_ext_len <= 80 then return end
+
+  bytes_remaining = ipmx_ext_len - 80
+
+  dbg_print("> Parse Media Info Blocks")
+  dbg_print("bytes_remaining: " ..bytes_remaining)
+  -- Loop over the remaining bytes to extract all Media Info Blocks
+  while bytes_remaining > 0 do
+    if bytes_remaining < 4 then
+      ipmx_info_tree:add_proto_expert_info(E.block_length_error, "Unable to parse Media Info Block header")
+      return
+    end
+
+    -- Extract media info block and add to IPMX info block tree
+    local media_block_type = buffer:range(offset,2):uint()
+    -- Media info block length field contains the length of the media info block,
+    -- including the header, the media info block content and any padding.
+    -- The value is in 32-bit words minus one.
+    local media_block_len = buffer:range(offset+2,2):uint()*4
+    if bytes_remaining < (media_block_len+4) then
+      ipmx_info_tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+      return
+    end
+    local media_block_tree = ipmx_info_tree:add(ipmx_info, buffer(offset,media_block_len+4), "Media Info Block")
+    media_block_tree:add(media_info_type, buffer(offset,2))
+    offset = offset + 2
+    local media_len_tree = media_block_tree:add(media_info_length, buffer(offset,2))
+    media_len_tree:append_text(" (" ..(media_block_len+4).. " bytes)")
+    offset = offset + 2
+
+    bytes_remaining = bytes_remaining - 4
+
+    dbg_print("offset: " ..offset)
+    dbg_print("bytes_remaining: " ..bytes_remaining)
+    dbg_print("media_block_len: " ..media_block_len)
+    -- Use the media info block type for selecting the parse function
+    local parse_func = media_info_parse_tbl[media_block_type]
+    if parse_func then
+      parse_func(buffer, offset, media_block_tree, media_block_len, bytes_remaining)
+    else
+      dbg_print("IPMX info:Unsupported media type")
+      media_block_tree:add(media_info_data, buffer(offset,media_block_len))
+    end
+    -- update offset and bytes remaining with the media info block length
+    offset = offset + media_block_len
+    bytes_remaining = bytes_remaining - media_block_len
+
+    dbg_print("bytes_remaining: " ..bytes_remaining)
+  end
 end
