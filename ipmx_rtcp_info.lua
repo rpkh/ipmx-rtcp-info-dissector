@@ -52,11 +52,13 @@ local ipmx_info_mediaclk = ProtoField.string("ipmx_rtcp_info.mediaclk", "mediacl
 
 -- IPMX Media Info Block types
 local media_type_tbl = {
-  [1] = "Uncompressed Active Video",
-  [2] = "PCM Digital Audio",
-  [3] = "Constant Bit-rate Compressed Video",
-  [4] = "AES3 Transparent Transport",
-  [5] = "(VBR) Compressed Video",
+  [0x01] = "Uncompressed Active Video",
+  [0x02] = "PCM Digital Audio",
+  [0x03] = "Constant Bit-rate Compressed Video",
+  [0x04] = "AES3 Transparent Transport",
+  [0x05] = "(VBR) Compressed Video",
+  [0x10] = "HKEP Info",
+  [0x11] = "PEP Info",
 }
 
 local media_info_type = ProtoField.uint16("ipmx_rtcp_info.media_info_type", "media info type", base.DEC, media_type_tbl)
@@ -93,6 +95,18 @@ local audio_info_packet_time = ProtoField.uint16("ipmx_rtcp_info.audio_info.pack
 local audio_info_meas_samp_rate = ProtoField.uint32("ipmx_rtcp_info.audio_info.meas_samp_rate", "measured sample rate", base.DEC)
 local audio_info_chan_order_len = ProtoField.uint32("ipmx_rtcp_info.audio_info.chan_order_len", "channel-order length", base.DEC)
 local audio_info_chan_order = ProtoField.string("ipmx_rtcp_info.audio_info.chan_order", "channel-order", base.ASCII)
+
+-------------------------------------------------------------------------------
+-- IPMX Media Info: HKEP
+local hkep_info_version = ProtoField.uint8("ipmx_rtcp_info.hkep_info.version", "version", base.DEC)
+local hkep_info_f_id = ProtoField.uint8("ipmx_rtcp_info.hkep_info.f_id", "f_id", base.DEC, nil, 0x0F)
+local hkep_info_s_id = ProtoField.uint8("ipmx_rtcp_info.hkep_info.s_id", "s_id", base.DEC, nil, 0x0F)
+
+-------------------------------------------------------------------------------
+-- IPMX Media Info: PEP
+local pep_info_version = ProtoField.uint8("ipmx_rtcp_info.pep_info.version", "version", base.DEC)
+local pep_info_f_id = ProtoField.uint8("ipmx_rtcp_info.pep_info.f_id", "f_id", base.DEC, nil, 0x0F)
+local pep_info_s_id = ProtoField.uint8("ipmx_rtcp_info.pep_info.s_id", "s_id", base.DEC, nil, 0x0F)
 
 -------------------------------------------------------------------------------
 -- RTCP Fields that are used as helpers for IPMX Info extraction
@@ -147,6 +161,14 @@ ipmx_info.fields = {
   audio_info_meas_samp_rate,
   audio_info_chan_order_len,
   audio_info_chan_order,
+  -- IPMX Media Info: HKEP
+  hkep_info_version,
+  hkep_info_f_id,
+  hkep_info_s_id,
+  -- IPMX Media Info: PEP
+  pep_info_version,
+  pep_info_f_id,
+  pep_info_s_id,
 }
 
 -- Expert info definitions (mostly used for notifying errors)
@@ -256,15 +278,57 @@ function audio_info_parse(buffer, offset, tree, block_len, bytes_remaining)
   audio_tree:add(audio_info_chan_order, buffer(offset,ch_order_len))
 end
 
+-- Function for parsing and displaying the HKEP Media Info Block
+-- The Info Block has a fixed length of 4 bytes.
+function hkep_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> hkep_info_parse")
+  if (bytes_remaining < block_len) or (block_len ~= 4) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local hkep_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: HKEP Info")
+  hkep_tree:add(hkep_info_version, buffer(offset,1))
+  offset = offset + 1
+  hkep_tree:add(hkep_info_f_id, buffer(offset,1))
+  offset = offset + 1
+  hkep_tree:add(hkep_info_s_id, buffer(offset,1))
+  offset = offset + 1
+  -- rsvd3
+  offset = offset + 1
+end
+
+-- Function for parsing and displaying the PEP Media Info Block
+-- The Info Block has a fixed length of 4 bytes.
+function pep_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> pep_info_parse")
+  if (bytes_remaining < block_len) or (block_len ~= 4) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local pep_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: PEP Info")
+  pep_tree:add(pep_info_version, buffer(offset,1))
+  offset = offset + 1
+  pep_tree:add(pep_info_f_id, buffer(offset,1))
+  offset = offset + 1
+  pep_tree:add(pep_info_s_id, buffer(offset,1))
+  offset = offset + 1
+  -- rsvd3
+  offset = offset + 1
+end
+
 -- Media Info parse function table.
 -- Index should match IPMX Media Info Block types (media_type_tbl)
 local media_info_parse_tbl =
 {
-  [1] = video_info_parse,
-  [2] = audio_info_parse,
-  [3] = video_info_parse,
-  [4] = audio_info_parse,
-  [5] = video_info_parse,
+  [0x01] = video_info_parse,
+  [0x02] = audio_info_parse,
+  [0x03] = video_info_parse,
+  [0x04] = audio_info_parse,
+  [0x05] = video_info_parse,
+  [0x10] = hkep_info_parse,
+  [0x11] = pep_info_parse,
 }
 
 -------------------------------------------------------------------------------
