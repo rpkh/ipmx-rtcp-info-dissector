@@ -4,11 +4,14 @@ Lua Wireshark post-dissector for extracting IPMX info blocks from RTCP sender re
 ## Supported Media Info Block types
 | Media Info Block type |  Specification |  Description |
 | :-------------------: | :------------- | :----------- |
-|  0x1                  | TR-10-2        | Uncompressed Active Video |
-|  0x2                  | TR-10-3        | PCM Digital Audio |
-|  0x3                  | TR-10-11       | Constant Bit-Rate Compressed Video |
-|  0x4                  | TR-10-12       | AES3 Transparent Transport |
-|  0x5                  | TR-10-7        | (VBR) Compressed Video |
+|  0x01                 | TR-10-2        | Uncompressed Active Video |
+|  0x02                 | TR-10-3        | PCM Digital Audio |
+|  0x03                 | TR-10-11       | Constant Bit-Rate Compressed Video |
+|  0x04                 | TR-10-12       | AES3 Transparent Transport |
+|  0x05                 | TR-10-7        | (VBR) Compressed Video |
+|  0x08                 | TR-10-15 Part 1| JPEG XS Codec Info |
+|  0x10                 | TR-10-5        | HKEP Info |
+|  0x11                 | TR-10-13       | PEP Info |
 
 ## How to install
 1. Open Wireshark.
@@ -35,6 +38,10 @@ For more info see [Wireshark issue](https://gitlab.com/wireshark/wireshark/-/iss
 The issue has been fixed starting with **Wireshark version 4.4.0**.
 
 ## Release History
+### v1.3.0
+- Added support for HKEP media info blocks.
+- Added support for PEP media info blocks.
+- Added support for JPEG XS media info blocks.
 ### v1.2.0
 - Added support for media info block for (VBR) compressed video.
 - Added length checks with error handling.
