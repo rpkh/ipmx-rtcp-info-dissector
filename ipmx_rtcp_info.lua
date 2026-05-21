@@ -100,7 +100,7 @@ local audio_info_chan_order = ProtoField.string("ipmx_rtcp_info.audio_info.chan_
 -------------------------------------------------------------------------------
 -- IPMX Media Info: JPEG XS Codec Info
 
--- Table definitions are from https://en.wikipedia.org/wiki/JPEG_XS#Profiles,_levels_and_sublevels
+-- Table definitions are from https://en.wikipedia.org/wiki/JPEG_XS#Profiles,_levels,_sublevels,_and_FBB_levels
 local tbl_jxs_ppih = {
   [0x1500]="Light 422.10",
   [0x1A00]="Light 444.12",
@@ -122,19 +122,33 @@ local tbl_jxs_ppih = {
   [0xC340]="HighBayer",
 }
 
+function jxs_is_tdc(ppih)
+  local s = tbl_jxs_ppih[ppih]
+  -- Check if ppih is found in table and if the string value starts with "TDC"
+  return type(s) == "string" and s:match("^TDC")
+end
+
+-- Level field
+-- Plev bit mask: xxxx xx.. .... .... (0xFC00)
+-- Field is grouped into a 6-bit value
 local tbl_jxs_plev_lev = {
   [0x00]="Unrestricted",
-  [0x04]="1k-1",
-  [0x10]="2k-1",
-  [0x20]="4k-1",
-  [0x24]="4k-2",
-  [0x28]="4k-3",
-  [0x30]="8k-1",
-  [0x34]="8k-2",
-  [0x38]="8k-3",
-  [0x40]="10k-1",
+  [0x01]="1k-1",
+  [0x04]="2k-1",
+  [0x08]="4k-1",
+  [0x09]="4k-2",
+  [0x0A]="4k-3",
+  [0x0B]="5k-1",
+  [0x0C]="8k-1",
+  [0x0D]="8k-2",
+  [0x0E]="8k-3",
+  [0x10]="10k-1",
 }
 
+-- Sublevel field
+-- Plev bit mask: .... .... x..x xxxx (0x009F)
+-- Field is grouped into a 8-bit value
+-- Bits[6:5] are treated as 0
 local tbl_jxs_plev_sublev = {
   [0x00]="Unrestricted",
   [0x80]="Full",
@@ -146,12 +160,27 @@ local tbl_jxs_plev_sublev = {
   [0x03]="Sublev2bpp",
 }
 
+-- FBB level field
+-- This field is only applicable to TDC profiles
+-- Plev bit mask: .... ..xx .xx. .... (0x0360)
+-- Field is grouped into a 5-bit value
+-- Bit[2] is treated as 0
+local tbl_jxs_plev_fbblev = {
+  [0x00]="Unrestricted",
+  [0x1B]="FbblevFull",
+  [0x18]="Fbblev12bpp",
+  [0x0A]="Fbblev8bpp",
+  [0x08]="Fbblev4.5bpp",
+  [0x03]="Fbblev3bpp",
+}
+
 local jxs_info_transmode = ProtoField.bool("ipmx_rtcp_info.jxs_info.T", "transmission mode (T)", 8, {"Sequential", "Non-sequential"}, 0x80)
 local jxs_info_packetmode = ProtoField.bool("ipmx_rtcp_info.jxs_info.P", "packetization mode (P)", 8, {"Slice", "Codestream"}, 0x40)
 local jxs_info_ppih = ProtoField.uint16("ipmx_rtcp_info.jxs_info.Ppih", "profile", base.HEX, tbl_jxs_ppih)
 local jxs_info_plev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.Plev", "Plev", base.HEX)
-local jxs_info_plev_lev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevLev", "level", base.HEX, tbl_jxs_plev_lev, 0xFF00)
-local jxs_info_plev_sublev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevSublev", "sublevel", base.HEX, tbl_jxs_plev_sublev, 0x00FF)
+local jxs_info_plev_lev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevLev", "level", base.HEX, tbl_jxs_plev_lev, 0xFC00)
+local jxs_info_plev_sublev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevSublev", "sublevel", base.HEX, tbl_jxs_plev_sublev, 0x009F)
+local jxs_info_plev_fbblev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevFbblev", "FBB level", base.HEX, tbl_jxs_plev_fbblev, 0x0360)
 
 -------------------------------------------------------------------------------
 -- IPMX Media Info: HKEP
@@ -233,6 +262,7 @@ ipmx_info.fields = {
   jxs_info_plev,
   jxs_info_plev_lev,
   jxs_info_plev_sublev,
+  jxs_info_plev_fbblev,
 }
 
 -- Expert info definitions (mostly used for notifying errors)
@@ -398,10 +428,14 @@ function jxs_info_parse(buffer, offset, tree, block_len, bytes_remaining)
   -- reserved
   offset = offset + 1
   jxs_tree:add(jxs_info_ppih, buffer(offset,2))
+  local jxs_ppih = buffer:range(offset,2):uint()
   offset = offset + 2
   jxs_tree:add(jxs_info_plev, buffer(offset,2))
   jxs_tree:add(jxs_info_plev_lev, buffer(offset,2))
   jxs_tree:add(jxs_info_plev_sublev, buffer(offset,2))
+  if jxs_is_tdc(jxs_ppih) then
+    jxs_tree:add(jxs_info_plev_fbblev, buffer(offset,2))
+  end
   offset = offset + 2
 end
 
