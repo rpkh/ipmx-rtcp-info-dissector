@@ -14,7 +14,7 @@
 --
 -------------------------------------------------------------------------------
 local plugin_info = {
-  version = "1.2.0",
+  version = "1.3.0",
   author = "Raymond Hermans",
   description = "Post-dissector for extracting IPMX info blocks from RTCP sender reports",
   repository = "https://github.com/rpkh/ipmx-rtcp-info-dissector",
@@ -52,11 +52,14 @@ local ipmx_info_mediaclk = ProtoField.string("ipmx_rtcp_info.mediaclk", "mediacl
 
 -- IPMX Media Info Block types
 local media_type_tbl = {
-  [1] = "Uncompressed Active Video",
-  [2] = "PCM Digital Audio",
-  [3] = "Constant Bit-rate Compressed Video",
-  [4] = "AES3 Transparent Transport",
-  [5] = "(VBR) Compressed Video",
+  [0x01] = "Uncompressed Active Video",
+  [0x02] = "PCM Digital Audio",
+  [0x03] = "Constant Bit-rate Compressed Video",
+  [0x04] = "AES3 Transparent Transport",
+  [0x05] = "(VBR) Compressed Video",
+  [0x08] = "JPEG XS Codec Info",
+  [0x10] = "HKEP Info",
+  [0x11] = "PEP Info",
 }
 
 local media_info_type = ProtoField.uint16("ipmx_rtcp_info.media_info_type", "media info type", base.DEC, media_type_tbl)
@@ -93,6 +96,103 @@ local audio_info_packet_time = ProtoField.uint16("ipmx_rtcp_info.audio_info.pack
 local audio_info_meas_samp_rate = ProtoField.uint32("ipmx_rtcp_info.audio_info.meas_samp_rate", "measured sample rate", base.DEC)
 local audio_info_chan_order_len = ProtoField.uint32("ipmx_rtcp_info.audio_info.chan_order_len", "channel-order length", base.DEC)
 local audio_info_chan_order = ProtoField.string("ipmx_rtcp_info.audio_info.chan_order", "channel-order", base.ASCII)
+
+-------------------------------------------------------------------------------
+-- IPMX Media Info: JPEG XS Codec Info
+
+-- Table definitions are from https://en.wikipedia.org/wiki/JPEG_XS#Profiles,_levels,_sublevels,_and_FBB_levels
+local tbl_jxs_ppih = {
+  [0x1500]="Light 422.10",
+  [0x1A00]="Light 444.12",
+  [0x2500]="Light-Subline 422.10",
+  [0x3240]="Main 420.12",
+  [0x3540]="Main 422.10",
+  [0x3A40]="Main 444.12",
+  [0x3E40]="Main 4444.12",
+  [0x4240]="High 420.12",
+  [0x4A40]="High 444.12",
+  [0x4E40]="High 4444.12",
+  [0x4A44]="CHigh 444.12",
+  [0x4A45]="TDC 444.12",
+  [0x6A45]="TDC MLS 444.12",
+  [0x6EC0]="MLS.12",
+  [0x6ED0]="MLS.16",
+  [0x9300]="LightBayer",
+  [0xB340]="MainBayer",
+  [0xC340]="HighBayer",
+}
+
+function jxs_is_tdc(ppih)
+  local s = tbl_jxs_ppih[ppih]
+  -- Check if ppih is found in table and if the string value starts with "TDC"
+  return type(s) == "string" and s:match("^TDC")
+end
+
+-- Level field
+-- Plev bit mask: xxxx xx.. .... .... (0xFC00)
+-- Field is grouped into a 6-bit value
+local tbl_jxs_plev_lev = {
+  [0x00]="Unrestricted",
+  [0x01]="1k-1",
+  [0x04]="2k-1",
+  [0x08]="4k-1",
+  [0x09]="4k-2",
+  [0x0A]="4k-3",
+  [0x0B]="5k-1",
+  [0x0C]="8k-1",
+  [0x0D]="8k-2",
+  [0x0E]="8k-3",
+  [0x10]="10k-1",
+}
+
+-- Sublevel field
+-- Plev bit mask: .... .... x..x xxxx (0x009F)
+-- Field is grouped into a 8-bit value
+-- Bits[6:5] are treated as 0
+local tbl_jxs_plev_sublev = {
+  [0x00]="Unrestricted",
+  [0x80]="Full",
+  [0x10]="Sublev12bpp",
+  [0x0C]="Sublev9bpp",
+  [0x08]="Sublev6bpp",
+  [0x06]="Sublev4bpp",
+  [0x04]="Sublev3bpp",
+  [0x03]="Sublev2bpp",
+}
+
+-- FBB level field
+-- This field is only applicable to TDC profiles
+-- Plev bit mask: .... ..xx .xx. .... (0x0360)
+-- Field is grouped into a 5-bit value
+-- Bit[2] is treated as 0
+local tbl_jxs_plev_fbblev = {
+  [0x00]="Unrestricted",
+  [0x1B]="FbblevFull",
+  [0x18]="Fbblev12bpp",
+  [0x0A]="Fbblev8bpp",
+  [0x08]="Fbblev4.5bpp",
+  [0x03]="Fbblev3bpp",
+}
+
+local jxs_info_transmode = ProtoField.bool("ipmx_rtcp_info.jxs_info.T", "transmission mode (T)", 8, {"Sequential", "Non-sequential"}, 0x80)
+local jxs_info_packetmode = ProtoField.bool("ipmx_rtcp_info.jxs_info.P", "packetization mode (P)", 8, {"Slice", "Codestream"}, 0x40)
+local jxs_info_ppih = ProtoField.uint16("ipmx_rtcp_info.jxs_info.Ppih", "profile", base.HEX, tbl_jxs_ppih)
+local jxs_info_plev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.Plev", "Plev", base.HEX)
+local jxs_info_plev_lev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevLev", "level", base.HEX, tbl_jxs_plev_lev, 0xFC00)
+local jxs_info_plev_sublev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevSublev", "sublevel", base.HEX, tbl_jxs_plev_sublev, 0x009F)
+local jxs_info_plev_fbblev = ProtoField.uint16("ipmx_rtcp_info.jxs_info.PlevFbblev", "FBB level", base.HEX, tbl_jxs_plev_fbblev, 0x0360)
+
+-------------------------------------------------------------------------------
+-- IPMX Media Info: HKEP
+local hkep_info_version = ProtoField.uint8("ipmx_rtcp_info.hkep_info.version", "version", base.DEC)
+local hkep_info_f_id = ProtoField.uint8("ipmx_rtcp_info.hkep_info.f_id", "f_id", base.DEC, nil, 0x0F)
+local hkep_info_s_id = ProtoField.uint8("ipmx_rtcp_info.hkep_info.s_id", "s_id", base.DEC, nil, 0x0F)
+
+-------------------------------------------------------------------------------
+-- IPMX Media Info: PEP
+local pep_info_version = ProtoField.uint8("ipmx_rtcp_info.pep_info.version", "version", base.DEC)
+local pep_info_f_id = ProtoField.uint8("ipmx_rtcp_info.pep_info.f_id", "f_id", base.DEC, nil, 0x0F)
+local pep_info_s_id = ProtoField.uint8("ipmx_rtcp_info.pep_info.s_id", "s_id", base.DEC, nil, 0x0F)
 
 -------------------------------------------------------------------------------
 -- RTCP Fields that are used as helpers for IPMX Info extraction
@@ -147,6 +247,22 @@ ipmx_info.fields = {
   audio_info_meas_samp_rate,
   audio_info_chan_order_len,
   audio_info_chan_order,
+  -- IPMX Media Info: HKEP
+  hkep_info_version,
+  hkep_info_f_id,
+  hkep_info_s_id,
+  -- IPMX Media Info: PEP
+  pep_info_version,
+  pep_info_f_id,
+  pep_info_s_id,
+  -- IPMX Media Info: JPEG XS Codec
+  jxs_info_transmode,
+  jxs_info_packetmode,
+  jxs_info_ppih,
+  jxs_info_plev,
+  jxs_info_plev_lev,
+  jxs_info_plev_sublev,
+  jxs_info_plev_fbblev,
 }
 
 -- Expert info definitions (mostly used for notifying errors)
@@ -256,15 +372,85 @@ function audio_info_parse(buffer, offset, tree, block_len, bytes_remaining)
   audio_tree:add(audio_info_chan_order, buffer(offset,ch_order_len))
 end
 
+-- Function for parsing and displaying the HKEP Media Info Block
+-- The Info Block has a fixed length of 4 bytes.
+function hkep_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> hkep_info_parse")
+  if (bytes_remaining < block_len) or (block_len ~= 4) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local hkep_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: HKEP Info")
+  hkep_tree:add(hkep_info_version, buffer(offset,1))
+  offset = offset + 1
+  hkep_tree:add(hkep_info_f_id, buffer(offset,1))
+  offset = offset + 1
+  hkep_tree:add(hkep_info_s_id, buffer(offset,1))
+  offset = offset + 1
+  -- rsvd3
+  offset = offset + 1
+end
+
+-- Function for parsing and displaying the PEP Media Info Block
+-- The Info Block has a fixed length of 4 bytes.
+function pep_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> pep_info_parse")
+  if (bytes_remaining < block_len) or (block_len ~= 4) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local pep_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: PEP Info")
+  pep_tree:add(pep_info_version, buffer(offset,1))
+  offset = offset + 1
+  pep_tree:add(pep_info_f_id, buffer(offset,1))
+  offset = offset + 1
+  pep_tree:add(pep_info_s_id, buffer(offset,1))
+  offset = offset + 1
+  -- rsvd3
+  offset = offset + 1
+end
+
+-- Function for parsing and displaying the JPEG XS Media Info Block
+-- The Info Block has a fixed length of 8 bytes.
+function jxs_info_parse(buffer, offset, tree, block_len, bytes_remaining)
+  dbg_print("> jxs_info_parse")
+  if (bytes_remaining < block_len) or (block_len ~= 8) then
+    tree:add_proto_expert_info(E.block_length_error, "Invalid Media Info Block Length")
+    return
+  end
+
+  local jxs_tree = tree:add(ipmx_info, buffer(offset,block_len), "Data: JPEG XS Codec Info")
+  jxs_tree:add(jxs_info_transmode, buffer(offset,1))
+  jxs_tree:add(jxs_info_packetmode, buffer(offset,1))
+  offset = offset + 1
+  -- reserved
+  offset = offset + 1
+  jxs_tree:add(jxs_info_ppih, buffer(offset,2))
+  local jxs_ppih = buffer:range(offset,2):uint()
+  offset = offset + 2
+  jxs_tree:add(jxs_info_plev, buffer(offset,2))
+  jxs_tree:add(jxs_info_plev_lev, buffer(offset,2))
+  jxs_tree:add(jxs_info_plev_sublev, buffer(offset,2))
+  if jxs_is_tdc(jxs_ppih) then
+    jxs_tree:add(jxs_info_plev_fbblev, buffer(offset,2))
+  end
+  offset = offset + 2
+end
+
 -- Media Info parse function table.
 -- Index should match IPMX Media Info Block types (media_type_tbl)
 local media_info_parse_tbl =
 {
-  [1] = video_info_parse,
-  [2] = audio_info_parse,
-  [3] = video_info_parse,
-  [4] = audio_info_parse,
-  [5] = video_info_parse,
+  [0x01] = video_info_parse,
+  [0x02] = audio_info_parse,
+  [0x03] = video_info_parse,
+  [0x04] = audio_info_parse,
+  [0x05] = video_info_parse,
+  [0x08] = jxs_info_parse,
+  [0x10] = hkep_info_parse,
+  [0x11] = pep_info_parse,
 }
 
 -------------------------------------------------------------------------------
